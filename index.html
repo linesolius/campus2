@@ -1,13 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
-// Firebase 불러오기 (경로는 본인의 프로젝트 구조에 맞게 수정하세요)
-import { db } from "../firebase"; 
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  orderBy 
-} from "firebase/firestore";
+
+// ⚠️ 방금 복사한 구글 웹 앱 URL을 여기에 붙여넣으세요!
+const SHEET_API_URL = "여기에_구글_웹앱_URL을_넣으세요";
 
 export default function AbnormalCommunity() {
   const [selectedPost, setSelectedPost] = useState(null);
@@ -16,35 +10,40 @@ export default function AbnormalCommunity() {
   const [search, setSearch] = useState("");
   const [likedPosts, setLikedPosts] = useState([]);
   const [isWriting, setIsWriting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [writingTag, setWritingTag] = useState("잡담");
 
   const [posts, setPosts] = useState([]);
 
   const notices = [];
   const menus = ["전체", "정보", "도움", "잡담", "거래", "전투"];
+  const availableTags = ["정보", "도움", "잡담", "거래", "전투"];
 
-  // 1. 컴포넌트 마운트 시 Firestore에서 게시글 목록 실시간으로 받아오기
+  // 1. 구글 시트에서 데이터 가져오기 함수 (새로고침 기능 겸용)
+  const fetchPosts = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(SHEET_API_URL);
+      const data = await response.json();
+      setPosts(data);
+      setNotification("스프레드시트 동기화 완료");
+    } catch (error) {
+      console.error("데이터 로드 실패:", error);
+      setNotification("데이터를 불러오지 못했습니다.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 컴포넌트 마운트 시 최초 1회 실행
   useEffect(() => {
-    const postsCollection = collection(db, "posts");
-    const q = query(postsCollection, orderBy("createdAt", "desc"));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const postsData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      setPosts(postsData);
-    }, (error) => {
-      console.error("데이터 가져오기 실패:", error);
-      setNotification("데이터를 불러오는 중 오류가 발생했습니다.");
-    });
-
-    return () => unsubscribe();
+    fetchPosts();
   }, []);
 
-  // 2. 선택된 게시글이 있을 때, 리스트가 업데이트되면 선택된 데이터도 동기화
+  // 2. 선택된 게시글 상세 동기화
   useEffect(() => {
     if (selectedPost) {
       const updated = posts.find((p) => p.id === selectedPost.id);
@@ -57,43 +56,56 @@ export default function AbnormalCommunity() {
       const matchSearch = post.title
         ?.toLowerCase()
         .includes(search.toLowerCase());
-
       const matchMenu = menu === "전체" || post.tag === menu;
-
       return matchSearch && matchMenu;
     });
   }, [posts, search, menu]);
 
-  // 3. Firestore에 새 게시글 데이터 저장하기 (views 제외)
+  // 3. 구글 시트에 새 게시글 데이터 전송하기 (POST)
   const handleCreatePost = async () => {
     if (!title.trim() || !content.trim()) {
       setNotification("제목과 내용을 입력하세요.");
       return;
     }
 
+    setNotification("게시글 전송 중...");
+    
     const newPost = {
       title,
       content,
-      author: "익명",
-      comments: 0, // 댓글 기능은 유지
-      tag: menu === "전체" ? "잡담" : menu,
-      createdAt: Date.now()
+      tag: writingTag,
+      author: "익명"
     };
 
     try {
-      await addDoc(collection(db, "posts"), newPost);
+      // 구글 웹앱 구조상 POST 요청 시 redirect 처리를 위해 모드를 다르게 주거나 
+      // 앱스 스크립트 특성상 text/plain으로 보내 파싱하는 것이 안전합니다.
+      await fetch(SHEET_API_URL, {
+        method: "POST",
+        mode: "no-cors", // CORS 에러 방지
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newPost),
+      });
       
       setTitle("");
       setContent("");
-      setNotification("게시글이 등록되었습니다.");
+      setWritingTag("잡담");
       setIsWriting(false);
+      setNotification("게시글이 등록되었습니다. (반영까지 1~2초 소요)");
+      
+      // 등록 후 리스트 다시 불러오기
+      setTimeout(() => {
+        fetchPosts();
+      }, 1500);
+
     } catch (error) {
       console.error("글 등록 오류:", error);
       setNotification("게시글 등록에 실패했습니다.");
     }
   };
 
-  // 4. 게시글 클릭 핸들러 (조회수 업데이트 로직 제거)
   const handlePostClick = (post) => {
     setNotification(`게시글 열람 중: ${post.title}`);
     setSelectedPost(post);
@@ -108,7 +120,7 @@ export default function AbnormalCommunity() {
               anomaly:thread
             </h1>
             <p className="text-xs text-zinc-500">
-              비인가 이상현상 커뮤니티
+              비인가 이상현상 스프레드시트 커뮤니티
             </p>
           </div>
 
@@ -136,7 +148,15 @@ export default function AbnormalCommunity() {
       <main className="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-[260px_1fr_280px] gap-6">
         <aside className="space-y-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg">
-            <h2 className="font-bold text-lg mb-3 text-red-400">메뉴</h2>
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-bold text-lg text-red-400">메뉴</h2>
+              <button 
+                onClick={fetchPosts} 
+                className="text-xs bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded text-zinc-400"
+              >
+                {isLoading ? "로딩중..." : "새로고침"}
+              </button>
+            </div>
 
             <ul className="space-y-2 text-sm text-zinc-300">
               {menus.map((item) => (
@@ -157,56 +177,19 @@ export default function AbnormalCommunity() {
               ))}
             </ul>
           </div>
-
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg">
-            <h2 className="font-bold text-lg mb-3 text-red-400">
-              공지
-            </h2>
-
-            <div className="space-y-3 text-sm">
-              {notices.length === 0 && (
-                <div className="text-zinc-500 text-sm">
-                  등록된 공지가 없습니다.
-                </div>
-              )}
-
-              {notices.map((item, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => setNotification(`공지 확인: ${item}`)}
-                  className="border-b border-zinc-800 pb-2 text-zinc-300 hover:text-white cursor-pointer transition"
-                >
-                  • {item}
-                </div>
-              ))}
-            </div>
-          </div>
         </aside>
 
         <section className="space-y-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 overflow-hidden relative">
             <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_top,red,transparent_70%)]" />
-
             <div className="relative z-10 flex items-center justify-between">
               <div>
                 <div className="mb-2 text-xs text-green-400 animate-pulse">
                   SYSTEM // {notification}
                 </div>
-
-                <h2 className="text-3xl font-black tracking-tight">
-                  anomaly:thread
-                </h2>
-
-                <p className="text-zinc-500 text-sm mt-2">
-                  이상현상 생존자 커뮤니티
-                </p>
+                <h2 className="text-3xl font-black tracking-tight">anomaly:thread</h2>
               </div>
-
               <div className="text-right">
-                <div className="text-sm text-zinc-500 mb-2">
-                  현재 카테고리
-                </div>
-
                 <div className="inline-flex px-4 py-2 rounded-xl bg-red-500/20 border border-red-500/20 text-red-300 font-semibold">
                   {menu}
                 </div>
@@ -217,13 +200,13 @@ export default function AbnormalCommunity() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-lg">
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <h2 className="font-bold text-lg">게시글</h2>
-              <div className="text-xs text-zinc-500">실시간</div>
+              <div className="text-xs text-zinc-500">{isLoading ? "동기화 중..." : "Sheets DB"}</div>
             </div>
 
             <div>
               {filteredPosts.length === 0 && (
                 <div className="px-5 py-10 text-center text-zinc-500">
-                  아직 작성된 게시글이 없습니다.
+                  {isLoading ? "데이터를 가져오는 중입니다..." : "아직 작성된 게시글이 없습니다."}
                 </div>
               )}
 
@@ -246,31 +229,22 @@ export default function AbnormalCommunity() {
                   <div className="flex items-center justify-between text-xs text-zinc-500">
                     <div className="flex items-center gap-4">
                       <span>{post.author}</span>
-                      {/* 조회수 표기를 삭제했습니다 */}
-                      <span>댓글 {post.comments}</span>
                     </div>
 
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-
                         if (likedPosts.includes(post.id)) {
-                          setLikedPosts(
-                            likedPosts.filter((p) => p !== post.id)
-                          );
+                          setLikedPosts(likedPosts.filter((p) => p !== post.id));
                         } else {
                           setLikedPosts([...likedPosts, post.id]);
                         }
                       }}
                       className={`px-2 py-1 rounded-lg transition ${
-                        likedPosts.includes(post.id)
-                          ? "bg-red-500/20 text-red-300"
-                          : "bg-zinc-800 hover:bg-zinc-700"
+                        likedPosts.includes(post.id) ? "bg-red-500/20 text-red-300" : "bg-zinc-800 hover:bg-zinc-700"
                       }`}
                     >
-                      {likedPosts.includes(post.id)
-                        ? "♥ 저장됨"
-                        : "♡ 저장"}
+                      {likedPosts.includes(post.id) ? "♥ 저장됨" : "♡ 저장"}
                     </button>
                   </div>
                 </div>
@@ -281,85 +255,68 @@ export default function AbnormalCommunity() {
 
         <aside>
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg">
-            <h2 className="font-bold text-lg text-red-400 mb-3">
-              서버 상태
-            </h2>
-
+            <h2 className="font-bold text-lg text-red-400 mb-3">DB 상태</h2>
             <div className="text-sm text-zinc-400 leading-relaxed">
-              현재 커뮤니티 데이터는 Firebase Firestore DB와 실시간 동기화 중입니다.
+              현재 Google Sheets와 연결되어 있습니다. 시트에서 직접 데이터를 수정해도 웹 앱에 반영됩니다.
             </div>
           </div>
         </aside>
       </main>
 
+      {/* 게시글 상세 보기 모달 */}
       {selectedPost && (
-        <div className="fixed inset-0 z-[90] bg-zinc-950 overflow-y-auto animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-[90] bg-zinc-950 overflow-y-auto">
           <div className="max-w-4xl mx-auto min-h-screen px-4 py-8">
             <div className="bg-zinc-900 border border-red-900 rounded-3xl p-8 shadow-2xl">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <div className="text-xs text-red-400 mb-1">
-                    {selectedPost.tag}
-                  </div>
-
-                  <h3 className="text-2xl font-black">
-                    {selectedPost.title}
-                  </h3>
+                  <div className="text-xs text-red-400 mb-1">{selectedPost.tag}</div>
+                  <h3 className="text-2xl font-black">{selectedPost.title}</h3>
                 </div>
-
                 <button
                   onClick={() => setSelectedPost(null)}
-                  className="text-sm bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl transition"
+                  className="text-sm bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl"
                 >
                   ← 목록으로
                 </button>
               </div>
-
-              <div className="text-sm text-zinc-400 mb-6">
-                {/* 본문 모달창 안에서도 조회수 표기를 삭제했습니다 */}
-                작성자 {selectedPost.author} · 댓글 {selectedPost.comments}
-              </div>
-
+              <div className="text-sm text-zinc-400 mb-6">작성자 {selectedPost.author}</div>
               <div className="space-y-4 text-zinc-300 leading-relaxed text-sm">
-                <p className="white-space-pre-wrap">{selectedPost.content}</p>
-              </div>
-
-              <div className="mt-10 pt-6 border-t border-zinc-800 text-xs text-zinc-500">
-                anomaly:thread archive system
+                <p className="whitespace-pre-wrap">{selectedPost.content}</p>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* 글쓰기 모달 */}
       {isWriting && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="w-full max-w-2xl bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
-              <div>
-                <div className="text-red-400 text-sm mb-1">
-                  새 게시글 작성
-                </div>
-
-                <h2 className="text-2xl font-black">
-                  게시글 작성
-                </h2>
-              </div>
-
-              <button
-                onClick={() => setIsWriting(false)}
-                className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl text-sm"
-              >
-                닫기
-              </button>
+              <h2 className="text-2xl font-black">게시글 작성</h2>
+              <button onClick={() => setIsWriting(false)} className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl text-sm">닫기</button>
             </div>
 
             <div className="space-y-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-zinc-400 px-1">태그 선택</label>
+                <select 
+                  value={writingTag}
+                  onChange={(e) => setWritingTag(e.target.value)}
+                  className="w-full bg-black/40 border border-zinc-700 rounded-xl px-4 py-3 outline-none text-zinc-300 text-sm"
+                >
+                  {availableTags.map((tag) => (
+                    <option key={tag} value={tag} className="bg-zinc-900">{tag}</option>
+                  ))}
+                </select>
+              </div>
+
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="제목 입력"
-                className="w-full bg-black/40 border border-zinc-700 rounded-xl px-4 py-3 outline-none focus:border-red-500"
+                className="w-full bg-black/40 border border-zinc-700 rounded-xl px-4 py-3 outline-none"
               />
 
               <textarea
@@ -367,12 +324,12 @@ export default function AbnormalCommunity() {
                 onChange={(e) => setContent(e.target.value)}
                 placeholder="내용 입력"
                 rows={8}
-                className="w-full bg-black/40 border border-zinc-700 rounded-xl px-4 py-3 outline-none resize-none focus:border-red-500"
+                className="w-full bg-black/40 border border-zinc-700 rounded-xl px-4 py-3 outline-none resize-none"
               />
 
               <button
                 onClick={handleCreatePost}
-                className="w-full bg-red-600 hover:bg-red-500 transition py-3 rounded-xl font-semibold"
+                className="w-full bg-red-600 hover:bg-red-500 text-white py-3 rounded-xl font-semibold transition"
               >
                 게시글 등록
               </button>
