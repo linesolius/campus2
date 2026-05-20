@@ -1,4 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+// Firebase 불러오기 (경로는 본인의 프로젝트 구조에 맞게 수정하세요)
+import { db } from "../firebase"; 
+import { 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy 
+} from "firebase/firestore";
 
 export default function AbnormalCommunity() {
   const [selectedPost, setSelectedPost] = useState(null);
@@ -14,13 +23,39 @@ export default function AbnormalCommunity() {
   const [posts, setPosts] = useState([]);
 
   const notices = [];
-
   const menus = ["전체", "정보", "도움", "잡담", "거래", "전투"];
+
+  // 1. 컴포넌트 마운트 시 Firestore에서 게시글 목록 실시간으로 받아오기
+  useEffect(() => {
+    const postsCollection = collection(db, "posts");
+    const q = query(postsCollection, orderBy("createdAt", "desc"));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const postsData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setPosts(postsData);
+    }, (error) => {
+      console.error("데이터 가져오기 실패:", error);
+      setNotification("데이터를 불러오는 중 오류가 발생했습니다.");
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 선택된 게시글이 있을 때, 리스트가 업데이트되면 선택된 데이터도 동기화
+  useEffect(() => {
+    if (selectedPost) {
+      const updated = posts.find((p) => p.id === selectedPost.id);
+      if (updated) setSelectedPost(updated);
+    }
+  }, [posts, selectedPost?.id]);
 
   const filteredPosts = useMemo(() => {
     return posts.filter((post) => {
       const matchSearch = post.title
-        .toLowerCase()
+        ?.toLowerCase()
         .includes(search.toLowerCase());
 
       const matchMenu = menu === "전체" || post.tag === menu;
@@ -29,29 +64,39 @@ export default function AbnormalCommunity() {
     });
   }, [posts, search, menu]);
 
-  const handleCreatePost = () => {
+  // 3. Firestore에 새 게시글 데이터 저장하기 (views 제외)
+  const handleCreatePost = async () => {
     if (!title.trim() || !content.trim()) {
       setNotification("제목과 내용을 입력하세요.");
       return;
     }
 
     const newPost = {
-      id: Date.now(),
       title,
       content,
       author: "익명",
-      views: 0,
-      comments: 0,
-      tag: menu === "전체" ? "잡담" : menu
+      comments: 0, // 댓글 기능은 유지
+      tag: menu === "전체" ? "잡담" : menu,
+      createdAt: Date.now()
     };
 
-    setPosts((prev) => [newPost, ...prev]);
+    try {
+      await addDoc(collection(db, "posts"), newPost);
+      
+      setTitle("");
+      setContent("");
+      setNotification("게시글이 등록되었습니다.");
+      setIsWriting(false);
+    } catch (error) {
+      console.error("글 등록 오류:", error);
+      setNotification("게시글 등록에 실패했습니다.");
+    }
+  };
 
-    setTitle("");
-    setContent("");
-
-    setNotification("게시글이 등록되었습니다.");
-    setIsWriting(false);
+  // 4. 게시글 클릭 핸들러 (조회수 업데이트 로직 제거)
+  const handlePostClick = (post) => {
+    setNotification(`게시글 열람 중: ${post.title}`);
+    setSelectedPost(post);
   };
 
   return (
@@ -185,24 +230,7 @@ export default function AbnormalCommunity() {
               {filteredPosts.map((post) => (
                 <div
                   key={post.id}
-                  onClick={() => {
-                    const updatedPost = {
-                      ...post,
-                      views: post.views + 1
-                    };
-
-                    setSelectedPost(updatedPost);
-
-                    setPosts((prev) =>
-                      prev.map((p) =>
-                        p.id === post.id
-                          ? { ...p, views: p.views + 1 }
-                          : p
-                      )
-                    );
-
-                    setNotification(`게시글 열람 중: ${post.title}`);
-                  }}
+                  onClick={() => handlePostClick(post)}
                   className="px-5 py-4 border-b border-zinc-800 hover:bg-zinc-800/40 transition cursor-pointer"
                 >
                   <div className="flex items-center gap-2 mb-2">
@@ -218,7 +246,7 @@ export default function AbnormalCommunity() {
                   <div className="flex items-center justify-between text-xs text-zinc-500">
                     <div className="flex items-center gap-4">
                       <span>{post.author}</span>
-                      <span>조회 {post.views}</span>
+                      {/* 조회수 표기를 삭제했습니다 */}
                       <span>댓글 {post.comments}</span>
                     </div>
 
@@ -258,7 +286,7 @@ export default function AbnormalCommunity() {
             </h2>
 
             <div className="text-sm text-zinc-400 leading-relaxed">
-              현재 커뮤니티 데이터는 사용자 작성 기반으로만 표시됩니다.
+              현재 커뮤니티 데이터는 Firebase Firestore DB와 실시간 동기화 중입니다.
             </div>
           </div>
         </aside>
@@ -288,11 +316,12 @@ export default function AbnormalCommunity() {
               </div>
 
               <div className="text-sm text-zinc-400 mb-6">
-                작성자 {selectedPost.author} · 조회 {selectedPost.views} · 댓글 {selectedPost.comments}
+                {/* 본문 모달창 안에서도 조회수 표기를 삭제했습니다 */}
+                작성자 {selectedPost.author} · 댓글 {selectedPost.comments}
               </div>
 
               <div className="space-y-4 text-zinc-300 leading-relaxed text-sm">
-                <p>{selectedPost.content}</p>
+                <p className="white-space-pre-wrap">{selectedPost.content}</p>
               </div>
 
               <div className="mt-10 pt-6 border-t border-zinc-800 text-xs text-zinc-500">
